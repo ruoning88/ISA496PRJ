@@ -1,0 +1,58 @@
+library(readxl)
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(DMwR)
+box <- read_excel("Box Dataset.xlsx",skip=1,col_names = TRUE,col_types = 
+                    c(rep("numeric",8),"date","numeric","text","text",rep("numeric",8),
+                      "text","numeric","numeric",rep("text",3),"numeric","numeric",rep("text",31)))
+
+#### Delete Blank Columns ####
+box <- box %>% select_if(~!all(is.na(.)))
+
+#### Delete IDs , Derived (Repetitive) Variables ####
+box <- box %>% select(-c(`Order #`,`Spec #`,`Customer Code`,`Fold Length`,`Length/Depth`,`Square Footage per piece`))
+
+#### Convert to factors ####
+box$Machine <- as.character(box$Machine)
+i <- sapply(box, is.character)
+box[i] <- lapply(box[i], as.factor)
+
+#### Target Variable ####
+box$Cost1 <- box$`Actual Setup Hours`+box$`Actual Run Hours`-box$`Standard Setup Hours`- box$`Standard Run Hours`
+
+#### Date Variable must be broken down into numbers ####
+box$prodmonth <- as.numeric(substring(as.character(box$LAST_WORKED),6,7))
+box <- box[,-7]
+
+#### Summary Statistics ####
+source("data summary.R")
+options(scipen=999)
+data.summary(box)
+
+#### Omit 64 observations with missing metrics (Variables with the same pattern of NAs entail 
+####the same information, delete them to avoid multiculinearity)####
+box <- box[-which(is.na(box$`# per Unit`)),]
+
+#### Impute N (No) to YES/NO indicators ####
+box2 <- box[,22:46]
+box1 <- box[,c(1:21,47,48)]
+i <- sapply(box2, is.factor)
+box2[i] <- lapply(box2[i], as.character)
+for (i in 1:25) {
+  box2[which(is.na(box2[,i])),i]<- "N"
+}
+i <- sapply(box2, is.character)
+box2[i] <- lapply(box2[i], as.factor)
+box <- cbind(box1,box2)
+
+#### Imput missing CuttingDie ####
+box$`Cutting Die #` <- as.character(box$`Cutting Die #`)
+box$`Cutting Die #`[which(is.na(box$`Cutting Die #`))] <- "UN"
+box$`Cutting Die #` <- as.factor(box$`Cutting Die #`)
+
+#### Missing Value Flags ####
+box$M_NumInk<- as.factor(ifelse(is.na(box$`# of Inks`),1,0))
+box$M_PercInk <- as.factor(ifelse(is.na(box$`% of Ink Coverage`),1,0))
+
+#### KNN Imputation for Numeric Variables ####
