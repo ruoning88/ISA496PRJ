@@ -52,7 +52,11 @@ box$`Cutting Die #`[which(is.na(box$`Cutting Die #`))] <- "UN"
 box$`Cutting Die #` <- as.factor(box$`Cutting Die #`)
 
 #### Missing Value Flags ####
-box$M_NumInk<- as.factor(ifelse(is.na(box$`# of Inks`),1,0))
-box$M_PercInk <- as.factor(ifelse(is.na(box$`% of Ink Coverage`),1,0))
+box$M_Ink<- as.factor(ifelse(is.na(box$`# of Inks`),1,0))
 
 #### KNN Imputation for Numeric Variables ####
+box.nums <- box %>% select_if(is.numeric) 
+box.cats <- select_if(box,negate(is.numeric))
+box.nums <- knnImputation(box.nums,meth="median",k=20)
+boxFinal <- cbind(box.nums,box.cats)
+data.summary(boxFinal)
