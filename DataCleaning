@@ -54,13 +54,12 @@ box$`Cutting Die #` <- as.character(box$`Cutting Die #`)
 box$`Cutting Die #`[which(is.na(box$`Cutting Die #`))] <- "UN"
 box$`Cutting Die #` <- as.factor(box$`Cutting Die #`)
 
-#### Missing Value Flags ####
-box$M_Ink<- as.factor(ifelse(is.na(box$`# of Inks`),1,0))
 
 #### KNN Imputation for Numeric Variables ####
 box.nums <- box %>% select_if(is.numeric) 
 box.cats <- select_if(box,negate(is.numeric))
-box.nums <- knnImputation(box.nums,meth="median",k=20)
+box.nums$`# of Inks`[which(is.na(box.nums$`# of Inks`))]<-0
+box.nums$`% of Ink Coverage`[which(is.na(box.nums$`% of Ink Coverage`))]<-0
 boxFinal <- cbind(box.nums,box.cats)
 
 #### Factor Level Collasping ####
@@ -103,9 +102,13 @@ data.summary(boxFinal)
 
 #### Target Variable Transformation
 ## We don't need the first 4 columns anymore > already combined them and created our target varibale Cost1
+boxFinal$CostSet <- boxFinal$`Actual Setup Hours`- boxFinal$`Standard Setup Hours`
+boxFinal$CostRun <- boxFinal$`Actual Run Hours`- boxFinal$`Standard Run Hours`
 boxFinal <- boxFinal[,-c(1:4)]
 ##Our target varibale is extremely right skewed. In order to model it, we have to normalize the distribution
 boxFinal$Cost1log <- log10(boxFinal$Cost1 + 1 - min(boxFinal$Cost1))
+boxFinal$CostSetlog <- log10(boxFinal$CostSet + 1 - min(boxFinal$CostSet))
+boxFinal$CostRunlog <- log10(boxFinal$CostRun + 1 - min(boxFinal$CostRun))
 ggplot()+geom_histogram(data=boxFinal,aes(x=Cost1),binwidth=0.01)
 outliers <- boxFinal$Cost1[which(boxFinal$Cost1>1)]
 
@@ -133,3 +136,4 @@ write.csv(box,file="BoxCleaned.csv", row.names = FALSE)
 index<-sample(1:nrow(box), size=round(0.75*nrow(box)))
 training <- box[index,]
 validation <- box[-index,]
+data.summary(box)
