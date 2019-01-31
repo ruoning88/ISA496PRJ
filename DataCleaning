@@ -105,7 +105,7 @@ data.summary(boxFinal)
 ## We don't need the first 4 columns anymore > already combined them and created our target varibale Cost1
 boxFinal <- boxFinal[,-c(1:4)]
 ##Our target varibale is extremely right skewed. In order to model it, we have to normalize the distribution
-boxFinal$Cost1 <- log10(boxFinal$Cost1 + 1 - min(boxFinal$Cost1))
+boxFinal$Cost1log <- log10(boxFinal$Cost1 + 1 - min(boxFinal$Cost1))
 ggplot()+geom_histogram(data=boxFinal,aes(x=Cost1),binwidth=0.01)
 outliers <- boxFinal$Cost1[which(boxFinal$Cost1>1)]
 
@@ -128,3 +128,8 @@ M<-cor(box.nums)
 library(corrplot)
 corrplot(M,method="number") ##No Big Colinearity Problem. 
 write.csv(box,file="BoxCleaned.csv", row.names = FALSE)
+
+#### Training/Validation Partition ####
+index<-sample(1:nrow(box), size=round(0.75*nrow(box)))
+training <- box[index,]
+validation <- box[-index,]
