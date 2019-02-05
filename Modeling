@@ -501,5 +501,231 @@ ptr.nnet.Run1 <- predict(Run.nnetFit ,newdata=validation)
 ptr.nnet.Run1 <- as.numeric(ptr.nnet.Run1)
 rmse.Run.nnet <- accuracy(ptr.nnet.Run1,validation$CostRun)
 
+## 3.3.2 CostRun ---- Cycle 2
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=8:12,.decay=c(0.01,0.05,0.1,0.15,0.2,0.3,0.4))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Run.nnetFit2 <- train(x=training.nl3[,-12],y=training.nl3$CostRun,method="nnet",
+                     metric="RMSE",linout=FALSE,preProcess=c("range"),
+                     tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Run.nnetFit2$bestTune
+Run.nnetFit2$results
+save(Run.nnetFit2,file="Run_nnet2.RData")
+ptr.nnet.Run2 <- predict(Run.nnetFit2 ,newdata=validation)
+ptr.nnet.Run2 <- as.numeric(ptr.nnet.Run2)
+rmse.Run.nnet2 <- accuracy(ptr.nnet.Run2,validation$CostRun)
+
+## 3.3.3 CostRun ---- Cycle 3
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=8:10,.decay=seq(0.06,0.14,0.01))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Run.nnetFit3 <- train(x=training.nl3[,-12],y=training.nl3$CostRun,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Run.nnetFit3$bestTune
+Run.nnetFit3$results
+save(Run.nnetFit3,file="Run_nnet3.RData")
+ptr.nnet.Run3 <- predict(Run.nnetFit3 ,newdata=validation)
+ptr.nnet.Run3 <- as.numeric(ptr.nnet.Run3)
+rmse.Run.nnet3 <- accuracy(ptr.nnet.Run3,validation$CostRun)
+
+#### 4. Elastic Net
+### 4.1 Cost1
+training.lm1 <- training %>% select(-c(Cost1,CostSet,CostRun,CostSetlog,CostRunlog))
+training.lm1 <- training.lm1[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricaltr <- training.lm1[,13:47] %>% model.matrix(~.)
+categoricaltr <- categoricaltr[,-1]
+numerictr <- training.lm1[,2:12] %>% as.matrix()
+training.lm1x <- cbind(numerictr,categoricaltr)
+training.lm1y <- training.lm1$Cost1log
+
+validation.enet <- validation %>% select(-c(Cost1,CostSet,CostRun,CostSetlog,CostRunlog))
+names(validation.enet)
+validation.enet <- validation.enet[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricalvl <- validation.enet[,13:47] %>% model.matrix(~.-1,.)
+categoricalvl <- categoricalvl[,-1]
+numericvl <- validation.enet[,2:12] %>% as.matrix()
+validation.enetx <- cbind(numericvl,categoricalvl)
+validation.enety <- validation.enet$Cost1log
+
+## 4.1.1 Cost1 ---- Cycle 1
+library(glmnet)
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.1,0.9,0.05),lambda=c(0.1,0.01,0.001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Tot_enetmodel <- train(x=training.lm1x,y=training.lm1y,method="glmnet",tuneGrid=netGrid,
+                   trControl = ctrl, metric="Rsquared")
+Tot_enetmodel$bestTune
+Tot_enetmodel$results
+save(Tot_enetmodel,file="Total_enet1.RData")
+ptr.tot.enet1 <- predict(Tot_enetmodel, newdata=validation.enetx)
+rmse.tot.enet1 <- accuracy(ptr.tot.enet1, validation.enety)
+
+## 4.1.2 Cost1 ---- Cycle 2
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0,0.3,0.01),lambda=seq(0.00001,0.01,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Tot_enetmodel2 <- train(x=training.lm1x,y=training.lm1y,method="glmnet",tuneGrid=netGrid,
+                       trControl = ctrl, metric="Rsquared")
+Tot_enetmodel2$bestTune
+result1 <- as.data.frame(Tot_enetmodel2$results)
+rsq <- result1[30008,4]
+save(Tot_enetmodel2,file="Total_enet2.RData")
+ptr.tot.enet2 <- predict(Tot_enetmodel2, newdata=validation.enetx)
+rmse.tot.enet2 <- accuracy(ptr.tot.enet2, validation.enety)
+
+## 4.1.3 Cost1 ---- Cycle 3
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.05,0.5,0.01),lambda=seq(0,0.0003,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Tot_enetmodel3 <- train(x=training.lm1x,y=training.lm1y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Tot_enetmodel3$bestTune
+result2 <- as.data.frame(Tot_enetmodel3$results)
+rsq2 <- result2[1216,4]
+save(Tot_enetmodel3,file="Total_enet3.RData")
+ptr.tot.enet3 <- predict(Tot_enetmodel3, newdata=validation.enetx)
+rmse.tot.enet3 <- accuracy(ptr.tot.enet3, validation.enety)
+
+## 4.1.4 Variable Importance
+varEnet_Tot <- varImp(Tot_enetmodel3)
+varen_Tot <- as.data.frame(varEnet_Tot$importance)
+plot(varEnet_Tot,cex=0.1)
+varen_Tot <- data.frame(overall=varen_Tot$Overall,names=rownames(varen_Tot))
+varen_Tot <- varen_Tot[order(varen_Tot$overall,decreasing=T),]
+imp_Tot <- varen_Tot[1:29,]
+termsen_Tot <- varen_Tot$names[1:29]
+termsen_Tot <- as.character(termsen_Tot)
+
+### 4.2 CostSet
+training.lm2 <- training %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostRunlog))
+training.lm2 <- training.lm2[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricaltr <- training.lm2[,13:47] %>% model.matrix(~.-1,.)
+categoricaltr <- categoricaltr[,-1]
+numerictr <- training.lm2[,2:12] %>% as.matrix()
+training.lm2x <- cbind(numerictr,categoricaltr)
+training.lm2y <- training.lm2$CostSetlog
+
+validation.enet2 <- validation %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostRunlog))
+validation.enet2 <- validation.enet2[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricalvl <- validation.enet2[,13:47] %>% model.matrix(~.-1,.)
+categoricalvl <- categoricalvl[,-1]
+numericvl <- validation.enet2[,2:12] %>% as.matrix()
+validation.enet2x <- cbind(numericvl,categoricalvl)
+validation.enet2y <- validation.enet2$CostSetlog
+
+## 4.2.1 CostSet ---- Cycle 1
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.1,0.9,0.05),lambda=c(0.1,0.01,0.001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Set_enetmodel <- train(x=training.lm2x,y=training.lm2y,method="glmnet",tuneGrid=netGrid,
+                       trControl = ctrl, metric="Rsquared")
+Set_enetmodel$bestTune
+Set_enetmodel$results
+save(Set_enetmodel,file="Set_enet1.RData")
+ptr.set.enet1 <- predict(Set_enetmodel, newdata=validation.enet2x)
+rmse.set.enet1 <- accuracy(ptr.set.enet1, validation.enet2y)
+
+## 4.2.2 CostSet ---- Cycle2
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0,0.3,0.01),lambda=seq(0.00001,0.01,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Set_enetmodel2 <- train(x=training.lm2x,y=training.lm2y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Set_enetmodel2$bestTune
+result21 <- as.data.frame(Set_enetmodel2$results)
+rsq21 <- result21[12010,4]
+save(Set_enetmodel2,file="Set_enet2.RData")
+ptr.set.enet2 <- predict(Set_enetmodel2, newdata=validation.enet2x)
+rmse.set.enet2 <- accuracy(ptr.set.enet2, validation.enet2y)
+
+## 4.2.3 Variable Importance for SETUP Time
+varEnet_Set <- varImp(Set_enetmodel2)
+varen_Set <- as.data.frame(varEnet_Set$importance)
+plot(varEnet_Set,cex=0.1)
+varen_Set <- data.frame(overall=varen_Set$Overall,names=rownames(varen_Set))
+varen_Set <- varen_Set[order(varen_Set$overall,decreasing=T),]
+imp_Set <- varen_Set[1:23,]
+termsen_Set <- varen_Set$names[1:23]
+termsen_Set <- as.character(termsen_Set)
+
+### 4.3 CostRun
+training.lm3 <- training %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostSetlog))
+training.lm3 <- training.lm3[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricaltr <- training.lm3[,13:47] %>% model.matrix(~.-1,.)
+categoricaltr <- categoricaltr[,-1]
+numerictr <- training.lm3[,2:12] %>% as.matrix()
+training.lm3x <- cbind(numerictr,categoricaltr)
+training.lm3y <- training.lm3$CostRunlog
+
+validation.enet3 <- validation %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostSetlog))
+validation.enet3 <- validation.enet3[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricalvl <- validation.enet3[,13:47] %>% model.matrix(~.-1,.)
+categoricalvl <- categoricalvl[,-1]
+numericvl <- validation.enet3[,2:12] %>% as.matrix()
+validation.enet3x <- cbind(numericvl,categoricalvl)
+validation.enet3y <- validation.enet3$CostRunlog
+
+## 4.3.1 CostRun ----- Cycle 1
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.1,0.9,0.05),lambda=c(0.1,0.01,0.001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Run_enetmodel <- train(x=training.lm3x,y=training.lm3y,method="glmnet",tuneGrid=netGrid,
+                       trControl = ctrl, metric="Rsquared")
+Run_enetmodel$bestTune
+Run_enetmodel$results
+save(Run_enetmodel,file="Run_enet1.RData")
+ptr.run.enet1 <- predict(Run_enetmodel, newdata=validation.enet3x)
+rmse.run.enet1 <- accuracy(ptr.run.enet1, validation.enet3y)
+
+## 4.3.2 CostRun ----- Cycle2
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0,0.3,0.01),lambda=seq(0.00001,0.01,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Run_enetmodel2 <- train(x=training.lm3x,y=training.lm3y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Run_enetmodel2$bestTune
+result31 <- as.data.frame(Run_enetmodel2$results)
+rsq31 <- result31[30019,4]
+save(Run_enetmodel2,file="Run_enet2.RData")
+ptr.run.enet2 <- predict(Run_enetmodel2, newdata=validation.enet3x)
+rmse.run.enet2 <- accuracy(ptr.run.enet2, validation.enet3y)
+
+## 4.3.3 CostRun ---- Cycle 3
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.05,0.5,0.01),lambda=seq(0,0.0004,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Run_enetmodel3 <- train(x=training.lm3x,y=training.lm3y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Run_enetmodel3$bestTune
+result32 <- as.data.frame(Run_enetmodel3$results)
+rsq32 <- result32[1736,4]
+save(Run_enetmodel3,file="Run_enet3.RData")
+ptr.run.enet3 <- predict(Run_enetmodel3, newdata=validation.enet3x)
+rmse.run.enet3 <- accuracy(ptr.run.enet3, validation.enet3y)
+
+## 4.1.4 Variable Importance
+varEnet_Run <- varImp(Run_enetmodel3)
+varen_Run <- as.data.frame(varEnet_Run$importance)
+plot(varEnet_Run,cex=0.1)
+varen_Run <- data.frame(overall=varen_Run$Overall,names=rownames(varen_Run))
+varen_Run <- varen_Run[order(varen_Run$overall,decreasing=T),]
+imp_Run <- varen_Run[1:25,]
+termsen_Run <- varen_Run$names[1:25]
+termsen_Run <- as.character(termsen_Run)
 
 stopCluster(cl)
