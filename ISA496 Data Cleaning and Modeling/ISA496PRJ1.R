@@ -1,0 +1,882 @@
+library(readxl)
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+box <- read_excel("Box Dataset.xlsx",skip=1,col_names = TRUE,col_types = 
+                    c(rep("numeric",8),"date","numeric","text","text",rep("numeric",8),
+                      "text","numeric","numeric",rep("text",3),"numeric","numeric",rep("text",31)))
+
+#### Delete Blank Columns ####
+box <- box %>% select_if(~!all(is.na(.)))
+
+#### Delete IDs , Derived (Repetitive) Variables ####
+box <- box %>% select(-c(`Order #`,`Spec #`,`Customer Code`,`Fold Length`,`Length/Depth`,`Square Footage per piece`))
+
+#### Convert to factors ####
+box$Machine <- as.character(box$Machine)
+i <- sapply(box, is.character)
+box[i] <- lapply(box[i], as.factor)
+
+#### Target Variable ####
+box$Cost1 <- box$`Actual Setup Hours`+box$`Actual Run Hours`-box$`Standard Setup Hours`- box$`Standard Run Hours`
+
+#### Date Variable must be broken down into numbers ####
+box$prodmonth <- as.numeric(substring(as.character(box$LAST_WORKED),6,7))
+box <- box[,-7]
+
+#### Summary Statistics ####
+source("data summary.R")
+options(scipen=999)
+data.summary(box)
+
+#### Omit 64 observations with missing metrics (Variables with the same pattern of NAs entail 
+####the same information, delete them to avoid multiculinearity)####
+box <- box[-which(is.na(box$`# per Unit`)),]
+
+#### Impute N (No) to YES/NO indicators ####
+box2 <- box[,22:46]
+box1 <- box[,c(1:21,47,48)]
+i <- sapply(box2, is.factor)
+box2[i] <- lapply(box2[i], as.character)
+for (i in 1:25) {
+  box2[which(is.na(box2[,i])),i]<- "N"
+}
+i <- sapply(box2, is.character)
+box2[i] <- lapply(box2[i], as.factor)
+box <- cbind(box1,box2)
+##SNOW2SLIDES only has one level, eliminate it
+box <- box %>% select(-`Snow 2 Sides`)
+
+#### Imput missing CuttingDie ####
+box$`Cutting Die #` <- as.character(box$`Cutting Die #`)
+box$`Cutting Die #`[which(is.na(box$`Cutting Die #`))] <- "UN"
+box$`Cutting Die #` <- as.factor(box$`Cutting Die #`)
+
+
+#### KNN Imputation for Numeric Variables ####
+box.nums <- box %>% select_if(is.numeric) 
+box.cats <- select_if(box,negate(is.numeric))
+box.nums$`# of Inks`[which(is.na(box.nums$`# of Inks`))]<-0
+box.nums$`% of Ink Coverage`[which(is.na(box.nums$`% of Ink Coverage`))]<-0
+boxFinal <- cbind(box.nums,box.cats)
+
+#### Factor Level Collasping ####
+boxFinal$Style <- recode_factor(boxFinal$Style, "FOLL"="OTH", "FOLW"="OTH","FOL"="OTH", 
+                                "HSCL"="OTH","HSCW"="OTH","RSCM"="RSC","RSCW"="RSC","HSC"="OTH",
+                                "HSCL-DC"="OTH","HSCL2UP"="OTH","HSCW-DC"="OTH",
+                                "RSCL-BID"="RSCL", "RSCL-DC"="RSCL", "RSCMD1"="RSC",
+                                  "RSCMD2"="RSC","RSCMD3"="RSC","RSCW-BID"="RSC","RSCW-DC"="RSC",
+                                "RSCWXF"="RSC","TUBELFLANGED"="OTH", "SPECIAL BOX"="OTH","D/C"="OTH")
+
+boxFinal$`Cutting Die #` <- as.character(boxFinal$`Cutting Die #`)
+boxFinal$`Cutting Die #`[which(boxFinal$`Cutting Die #` != "CR12152C" & boxFinal$`Cutting Die #` != "UN")] <- "Others"
+boxFinal$`Cutting Die #` <- as.factor(boxFinal$`Cutting Die #`)
+
+boxtest <-boxFinal
+boxtest$Grade <- as.character(boxtest$Grade )
+grade <- unique(as.factor(str_replace_all(substring(boxtest$Grade,1,4),"[^[:alnum:]]", "")))
+# First Collaspe factors according to the first 3-4 letters
+for(i in 1:length(grade)) {
+sch <- as.character(grade[i])
+index <- startsWith(boxtest$Grade,sch)
+boxtest$Grade[index] <- sch
+}
+boxtest$Grade <- as.factor(boxtest$Grade )
+# Collaspe even more so that the occurence of each factor level is greater than 10% of the total rows in this dataset
+boxtest$Grade <- recode_factor(boxtest$Grade, "ROCK"="48C", "200B"="200", "200C"="200",
+                               "26B"="26", "26C"="26","275B"="275", "275C"="275","29B"="29",
+                               "29C"="29", "44B"="44", "44C"="44", "44K"="44","55C"="55",
+                               "55EB"="55","32B"="32","32C"="32","32E"="32")
+boxtest$Grade <- recode_factor(boxtest$Grade, "26"="OTH","29"="OTH","55"="OTH","250C"="OTH",
+                               "350B"="OTH", "400B"="OTH", "40C"="OTH", "450B"="OTH","48BC"="OTH",
+                               "51BC"="OTH","71BC"="OTH", "82BC"="OTH","Non"="OTH","Pre"="OTH",
+                               "V3C"="OTH","275"="OTH","44"="40","48C"="40")
+boxFinal <- boxtest
+
+boxFinal$Flute <- recode_factor(boxFinal$Flute, "BC"="B", "E"="B","EB"="B")
+boxFinal$`Glue Joint` <- recode_factor(boxFinal$`Glue Joint`, "Glued 1 3/8\""="Glued")
+boxFinal$`Product Code` <- recode_factor(boxFinal$`Product Code`, "MARTI"="WRDFG")
+data.summary(boxFinal)
+
+#### Target Variable Transformation
+## We don't need the first 4 columns anymore > already combined them and created our target varibale Cost1
+boxFinal$CostSet <- boxFinal$`Actual Setup Hours`- boxFinal$`Standard Setup Hours`
+boxFinal$CostRun <- boxFinal$`Actual Run Hours`- boxFinal$`Standard Run Hours`
+boxFinal <- boxFinal[,-c(1:4)]
+##Our target varibale is extremely right skewed. In order to model it, we have to normalize the distribution
+boxFinal$Cost1log <- log10(boxFinal$Cost1 + 1 - min(boxFinal$Cost1))
+boxFinal$CostSetlog <- log10(boxFinal$CostSet + 1 - min(boxFinal$CostSet))
+boxFinal$CostRunlog <- log10(boxFinal$CostRun + 1 - min(boxFinal$CostRun))
+ggplot()+geom_histogram(data=boxFinal,aes(x=Cost1),binwidth=0.01)
+outliers <- boxFinal$Cost1[which(boxFinal$Cost1>1)]
+
+#### Create Dummy Variables ####
+boxFinal$`HH, Attachments` <- as.character(boxFinal$`HH, Attachments`)
+boxFinal$`HH, Attachments`[which(boxFinal$`HH, Attachments`=="1")] <- "Y"
+boxFinal$`HH, Attachments` <- as.factor(boxFinal$`HH, Attachments`)
+box.nums <- boxFinal %>% select_if(is.numeric) 
+box.cats <- select_if(boxFinal,negate(is.numeric))
+dummies <- model.matrix( ~.,data=box.cats)
+dummies <- as.data.frame(dummies)
+dummies <- dummies[,-1]
+dummies <- lapply(dummies,factor)
+dummies <- as.data.frame(dummies)
+box <- cbind(box.nums,dummies)
+rm(boxtest,boxFinal,box.cats,dummies)
+
+#### Checking Colinearity ####
+M<-cor(box.nums)
+library(corrplot)
+corrplot(M,method="number") ##No Big Colinearity Problem. 
+write.csv(box,file="BoxCleaned.csv", row.names = FALSE)
+
+#### Training/Validation Partition ####
+set.seed(13)
+index<-sample(1:nrow(box), size=round(0.75*nrow(box)))
+training <- box[index,]
+validation <- box[-index,]
+data.summary(box)
+summary(box$Machine4)
+save (training, file="training.RData")
+save(validation,file="validation.RData")
+
+#### Modeling ####
+library(doParallel)
+cl <-makePSOCKcluster(3)
+registerDoParallel(cl)
+
+#### 1. Linaer Regression ####
+### 1.1 Using Target Variable Cost1log (combined setup/run difference) ####
+#### 1.1.1 Without interaction terms
+training.lm1 <- training %>% select(-c(Cost1,CostSet,CostRun,CostSetlog,CostRunlog))
+full<-lm(Cost1log~.,data=training.lm1)
+null<-lm(Cost1log~ 1.,data=training.lm1)
+step1 <- step(null,list(lower=formula(null),upper=formula(full)),data=training.lm1,direction="both",trace=0)
+save(step1,file="Step1.RData")
+summary(step1)
+library(forecast)
+p.step1 <- predict(step1,newdata=validation)
+rmse.step1 <- accuracy(p.step1, validation$Cost1log)
+
+#### 1.1.2 With interaction terms
+formula(step1)
+full2<-lm(Cost1log~ (Machine4 + `Gross Qty Ran` + X.Ink...50..Y + `% of Ink Coverage` + 
+           `# of Inks` + WRAY + Grade32 + Grade40 + X.26..Medium.Y + 
+           X.D.C.Attachment.Y + Grade200 + `# per Unit` + `Box Depth` + 
+           X.Cutting.Die...Others + `Sheet Length` + StyleRSCL + StyleRSC + 
+           X.Cutting.Die...UN + X.HH..Attachments.Y + X.Full.Part.D.C.Y + 
+           X.33..Medium.DW.Y + `Box Length` + `Box Width` + NUGY + X.40..Medium.Y + 
+           X.Ext.Glue.Tab.Y + X.Glue.Joint.Extended.Glue + X.Ea.Ink.Change.Y + 
+           X...500.Box.Unt.Y + X.100..Coverage.Y + X.NUG.HZ.Y + `# per Bundle` + 
+           X.33..Medium.Y)^2, data=training.lm1)
+null<-lm(Cost1log~ 1.,data=training.lm1)
+step2 <- step(null,list(lower=formula(null),upper=formula(full2)),data=training.lm1,direction="both",trace=0)
+save(step2,file="Step2.RData")
+summary(step2)
+p.step2 <- predict(step2,newdata=validation)
+rmse.step2 <- accuracy(p.step2, validation$Cost1log)
+
+#### 1.2 Using Target Variable CostSetlog & CostRunlog (buiding models for setup time difference and run 
+#time difference individually)
+#### 1.2.1 Without Interactions
+training.lmset <- training %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostRunlog))
+full<-lm(CostSetlog~.,data=training.lmset)
+null<-lm(CostSetlog~ 1.,data=training.lmset)
+set.step1 <- step(null,list(lower=formula(null),upper=formula(full)),data=training.lmset,direction="both",trace=0)
+save(set.step1,file="SetUp_Step1.RData")
+summary(set.step1)
+p.set.step1 <- predict(set.step1,newdata=validation)
+rmse.set.step1 <- accuracy(p.set.step1, validation$CostSetlog)
+
+training.lmrun <- training %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostSetlog))
+full<-lm(CostRunlog~.,data=training.lmrun)
+null<-lm(CostRunlog~ 1.,data=training.lmrun)
+run.step1 <- step(null,list(lower=formula(null),upper=formula(full)),data=training.lmrun,direction="both",trace=0)
+save(run.step1,file="Run_Step1.RData")
+summary(run.step1)
+p.run.step1 <- predict(run.step1,newdata=validation)
+rmse.run.step1 <- accuracy(p.run.step1, validation$CostRunlog)
+
+###1.2.2 With Interactions
+formula(set.step1)
+full2<-lm(CostSetlog~(Machine4 + X.Cutting.Die...Others + X.100..Coverage.Y + 
+                        X.Ea.Ink.Change.Y + `# of Inks` + `% of Ink Coverage` + `Box Width` + 
+                        X.26..Medium.Y + X.WRA.DW.Y + X.Box.Wid...5.5..Y + WRAY + 
+                        X.33..Medium.Y + X.Full.Part.D.C.Y + X.HH..Attachments.Y + 
+                        X.Cutting.Die...UN + X.D.C.Attachment.Y + X.Full.Die.Cut.Y + 
+                        X.33..Medium.DW.Y + StyleRSC + StyleRSCL + X.Glue.Joint.Extended.Glue + 
+                        X.Ext.Glue.Tab.Y + `# per Unit` + `Sheet Width` + Grade32 + 
+                        X.26..Medium.DW.Y + X.NUG.HZ.Y + `Sheet Length` + `Box Length` + 
+                        X.Ink...50..Y + X.Michelman.40E.Y + X.Product.Code.EVOL)^2,data=training.lmset)
+null<-lm(CostSetlog~ 1.,data=training.lmset)
+set.step2 <- step(null,list(lower=formula(null),upper=formula(full2)),data=training.lmset,direction="both",trace=0)
+save(set.step2,file="SetUp_Step2.RData")
+summary(set.step2)
+p.set.step2 <- predict(set.step2,newdata=validation)
+rmse.set.step2 <- accuracy(p.set.step2, validation$CostSetlog)
+
+formula(run.step1)
+full2<-lm(CostRunlog~(Machine4 + `Gross Qty Ran` + X.Ink...50..Y + X.Full.Die.Cut.Y + 
+                        X.D.C.Attachment.Y + Grade32 + Grade40 + `% of Ink Coverage` + 
+                        Grade200 + X.100..Coverage.Y + WRAY + `Box Depth` + `# per Unit` + 
+                        `Sheet Length` + StyleRSCL + StyleRSC + X.26..Medium.Y + 
+                        X.33..Medium.Y + X.33..Medium.DW.Y + `Box Length` + `Box Width` + 
+                        X...500.Box.Unt.Y + X.40..Medium.Y + X.Cutting.Die...UN + 
+                        `# per Bundle` + X.HH..Attachments.Y + `# of Inks` + NUGY + 
+                        X.NUG.HZ.Y)^2,data=training.lmrun)
+null<-lm(CostRunlog~ 1.,data=training.lmrun)
+run.step2 <- step(null,list(lower=formula(null),upper=formula(full2)),data=training.lmrun,direction="both",trace=0)
+save(run.step2,file="Run_Step2.RData")
+summary(run.step2)
+p.run.step2 <- predict(run.step2,newdata=validation)
+rmse.run.step2 <- accuracy(p.run.step2, validation$CostSetlog)
+
+#### 2. Random Forest Model ####
+### 2.1 Using Cost1 
+library(Rborist)
+library(caret)
+load("training.RData")
+load("Validation.RData")
+colnames(training) <- c("GrossQTYRan","NumPerUnit","NumPerBundle","BoxLength","BoxWidth","BoxDepth",
+                        "SheetLength","SheetWidth","NumInk","PercInk","Cost1","prodmonth","CostSet","CostRun","Cost1log",
+                        "CostSetlog","CostRunlog","Machine4","ProductCodeEVOL","StyleRSC", "StyleRSCL",
+                        "CuttingDieOthers","CuttingDieUN","Grade40","Grade200","Grade32","FluteC","GlueJointGlue","WRAY",
+                        "33Medium","26Medium","RockTennMRA","NUGHZ","NUG","40Medium","WRADW","33MediumDW","26MediumDW",
+                        "Michelman40E","250BoxUnit","500BoxUnit","100Coverage","15PerBundle","BoxWidth55","DCAttachment",
+                        "EaInkChange","EaPlateChange","ExtGlueTab","FullDieCut","FullPartDC","HHAttachment","Ink50")
+colnames(validation) <- c("GrossQTYRan","NumPerUnit","NumPerBundle","BoxLength","BoxWidth","BoxDepth",
+                          "SheetLength","SheetWidth","NumInk","PercInk","Cost1","prodmonth","CostSet","CostRun","Cost1log",
+                          "CostSetlog","CostRunlog","Machine4","ProductCodeEVOL","StyleRSC", "StyleRSCL",
+                          "CuttingDieOthers","CuttingDieUN","Grade40","Grade200","Grade32","FluteC","GlueJointGlue","WRAY",
+                          "33Medium","26Medium","RockTennMRA","NUGHZ","NUG","40Medium","WRADW","33MediumDW","26MediumDW",
+                          "Michelman40E","250BoxUnit","500BoxUnit","100Coverage","15PerBundle","BoxWidth55","DCAttachment",
+                          "EaInkChange","EaPlateChange","ExtGlueTab","FullDieCut","FullPartDC","HHAttachment","Ink50")
+bd <- rbind(training,validation)
+write.csv(bd, file="BoxCleaned.csv")
+training.nl <- training %>% select(-c(CostSet,CostRun,Cost1log,CostSetlog,CostRunlog))
+
+## 2.1.1 Cost1 --- Tuning Cycle 1
+kvalues <- c(5,10,15,20,25)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=10)
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest <- train(x=training.nl[-11], y=training.nl$Cost1,
+                 data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),importance="permutation")
+rforest$results
+save(rforest,file="Total_RF.RData")
+p.tot.rf1 <- predict(rforest,newdata=validation)
+rmse.tot.rf <- accuracy(p.tot.rf1, validation$Cost1)
+varI <- varImp(rforest)
+var <- as.data.frame(varI$importance)
+var <- data.frame(overall=var$Overall,names=rownames(var))
+var <- var[order(var$overall,decreasing=T),]
+
+
+## 2.1.2 Cost1 --- Tuning Cycle 2
+kvalues <- c(5,10,15)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(10,15,20,25))
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest2 <- train(x=training.nl[-11], y=training.nl$Cost1,
+                  data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest2$bestTune
+save(rforest2,file="Total_RF2.RData")
+p.tot.rf2 <- predict(rforest2,newdata=validation)
+rmse.tot.rf2 <- accuracy(p.tot.rf2, validation$Cost1)
+
+## 2.1.3 Cost1 ---- Tuning Cycle 3
+kvalues <- c(3,5,8)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(20,25,30,35))
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest3 <- train(x=training.nl[-11], y=training.nl$Cost1,
+                  data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest3$bestTune
+save(rforest3,file="Total_RF3.RData")
+p.tot.rf3 <- predict(rforest3,newdata=validation)
+rmse.tot.rf3 <- accuracy(p.tot.rf3, validation$Cost1)
+
+## 2.1.4 Cost1 ---Tuning Cycle 4
+kvalues <- c(3,4,5,6)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(30,35,40,45,50))
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest4 <- train(x=training.nl[-11], y=training.nl$Cost1,
+                  data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest4$bestTune
+save(rforest4,file="Total_RF4.RData")
+p.tot.rf4 <- predict(rforest4,newdata=validation)
+rmse.tot.rf4 <- accuracy(p.tot.rf4, validation$Cost1)
+
+## 2.1.5 Cost1 ---Tuning Cycle 5
+kvalues <- c(1,2,3,4)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(45,50,55,65))
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest5 <- train(x=training.nl[-11], y=training.nl$Cost1,
+                  data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest5$bestTune
+save(rforest5,file="Total_RF5.RData")
+p.tot.rf5 <- predict(rforest5,newdata=validation)
+rmse.tot.rf5 <- accuracy(p.tot.rf5, validation$Cost1)
+
+## 2.1.6 Cost1 ---Tuning Cycle 6
+kvalues <- 3
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(70,80,90,100,110,120))
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest6 <- train(x=training.nl[-11], y=training.nl$Cost1,
+                  data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest6$results
+save(rforest6,file="Total_RF6.RData")
+p.tot.rf6 <- predict(rforest6,newdata=validation)
+rmse.tot.rf6 <- accuracy(p.tot.rf6, validation$Cost1)
+
+## 2.1.7 Cost1 ---- Tune Cycle 7
+kvalues <- 3
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(85,90,95,130,140,150,160))
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest7 <- train(x=training.nl[-11], y=training.nl$Cost1,
+                  data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest7$results
+save(rforest7,file="Total_RF7.RData")
+p.tot.rf7 <- predict(rforest7,newdata=validation)
+rmse.tot.rf7 <- accuracy(p.tot.rf7, validation$Cost1)
+
+## 2.1.8 Cost1 ---- Tune Cycle 8
+kvalues <- 3
+tunegrid <- expand.grid(predFixed=kvalues,minNode=seq(91,99,1))
+set.seed(90)
+index <- 1:nrow(training.nl)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest8 <- train(x=training.nl[-11], y=training.nl$Cost1,
+                  data=training.nl,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest8$results
+save(rforest8,file="Total_RF8.RData")
+p.tot.rf8 <- predict(rforest8,newdata=validation)
+rmse.tot.rf8 <- accuracy(p.tot.rf8, validation$Cost1)
+
+### 2.2 CostSet
+training.nl2 <- training %>% select(-c(Cost1,CostRun,Cost1log,CostSetlog,CostRunlog))
+## 2.2.1 CostSet --- Cycle 1
+kvalues <- c(5,10,15,20,25)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=seq(50,110,10))
+set.seed(90)
+index <- 1:nrow(training.nl2)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Set <- train(x=training.nl2[-12], y=training.nl2$CostSet,
+                     data=training.nl2,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Set$results
+save(rforest.Set,file="Set_RF.RData")
+p.set.rf1 <- predict(rforest.Set,newdata=validation)
+rmse.set.rf <- accuracy(p.set.rf1, validation$CostSet)
+
+## 2.2.2 CostSet --- Cycle 2
+kvalues <- c(3,5,7,10,13)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=seq(10,50,10))
+set.seed(90)
+index <- 1:nrow(training.nl2)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Set2 <- train(x=training.nl2[-12], y=training.nl2$CostSet,
+                      data=training.nl2,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Set2$results
+save(rforest.Set2,file="Set_RF2.RData")
+p.set.rf2 <- predict(rforest.Set2,newdata=validation)
+rmse.set.rf2 <- accuracy(p.set.rf2, validation$CostSet)
+
+## 2.2.3 CostSet --- Cycle 3
+kvalues <- c(4,5,6)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=seq(21,39,1))
+set.seed(90)
+index <- 1:nrow(training.nl2)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Set3 <- train(x=training.nl2[-12], y=training.nl2$CostSet,
+                      data=training.nl2,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Set3$results
+save(rforest.Set3,file="Set_RF3.RData")
+p.set.rf3 <- predict(rforest.Set3,newdata=validation)
+rmse.set.rf3 <- accuracy(p.set.rf3, validation$CostSet)
+
+## 2.2.4 CostSet --- Cycle 4
+kvalues <- c(6,8,9)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(35,36,37,38,39,40))
+set.seed(90)
+index <- 1:nrow(training.nl2)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Set4 <- train(x=training.nl2[-12], y=training.nl2$CostSet,
+                      data=training.nl2,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Set4$results
+save(rforest.Set4,file="Set_RF4.RData")
+p.set.rf4 <- predict(rforest.Set4,newdata=validation)
+rmse.set.rf4 <- accuracy(p.set.rf4, validation$CostSet)
+
+### 2.3 CostRun
+training.nl3 <- training %>% select(-c(Cost1,CostSet,Cost1log,CostSetlog,CostRunlog))
+## 2.3.1 CostRun --- Cycle 1
+kvalues <- c(5,10,15,20,25)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=seq(50,110,10))
+set.seed(90)
+index <- 1:nrow(training.nl3)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Run <- train(x=training.nl3[-12], y=training.nl3$CostRun,
+                     data=training.nl3,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Run$results
+save(rforest.Run,file="Run_RF.RData")
+p.run.rf1 <- predict(rforest.Run,newdata=validation)
+rmse.run.rf <- accuracy(p.run.rf1, validation$CostRun)
+
+## 2.3.2 CostRun --- Cycle 2
+kvalues <- c(3,5,7,10,13)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(10,20,30,40,110,120,130,140))
+set.seed(90)
+index <- 1:nrow(training.nl3)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Run2 <- train(x=training.nl3[-12], y=training.nl3$CostRun,
+                      data=training.nl3,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Run2$results
+save(rforest.Run2,file="Run_RF2.RData")
+p.run.rf2 <- predict(rforest.Run2,newdata=validation)
+rmse.run.rf2 <- accuracy(p.run.rf2, validation$CostRun)
+
+## 2.3.3 CostRun --- Cycle 3
+kvalues <- c(8,9,10,11,12)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(110,120,130,140,150,160))
+set.seed(90)
+index <- 1:nrow(training.nl3)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Run3 <- train(x=training.nl3[-12], y=training.nl3$CostRun,
+                      data=training.nl3,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Run3$results
+save(rforest.Run3,file="Run_RF3.RData")
+p.run.rf3 <- predict(rforest.Run3,newdata=validation)
+rmse.run.rf3 <- accuracy(p.run.rf3, validation$CostRun)
+
+## 2.3.4 CostRun --- Cycle 4
+kvalues <- c(8,9,10)
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(141,143,145,147,150,153,156,159,170,180))
+set.seed(90)
+index <- 1:nrow(training.nl3)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Run4 <- train(x=training.nl3[-12], y=training.nl3$CostRun,
+                      data=training.nl3,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Run4$results
+save(rforest.Run4,file="Run_RF4.RData")
+p.run.rf4 <- predict(rforest.Run4,newdata=validation)
+rmse.run.rf4 <- accuracy(p.run.rf4, validation$CostRun)
+
+## 2.3.5 CostRun --- Cycle 5
+kvalues <- 8
+tunegrid <- expand.grid(predFixed=kvalues,minNode=c(140,141,142,143))
+set.seed(90)
+index <- 1:nrow(training.nl3)
+cvindx <- createFolds(index,k=10,returnTrain=TRUE)
+rforest.Run5 <- train(x=training.nl3[-12], y=training.nl3$CostRun,
+                      data=training.nl3,method="Rborist",tuneGrid=tunegrid,num.trees=500,trControl=trainControl(method="cv",index=cvindx,verboseIter=T,classProbs=F),metric="RMSE",importance="permutation")
+rforest.Run5$results
+save(rforest.Run5,file="Run_RF5.RData")
+p.run.rf5 <- predict(rforest.Run5,newdata=validation)
+rmse.run.rf5 <- accuracy(p.run.rf5, validation$CostRun)
+
+#### 3. Neural Nets
+### 3.1 Cost1
+## 3.1.1 Cost1 ---- Cycle 1
+library(nnet)
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=1:10,.decay=c(0,0.1,0.5,1))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Tot.nnetFit <- train(x=training.nl[,-11],y=training.nl$Cost1,method="nnet",
+                     metric="RMSE",linout=FALSE,preProcess=c("range"),
+                     tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Tot.nnetFit$bestTune
+Tot.nnetFit$results
+save(Tot.nnetFit,file="Total_nnet.RData")
+ptr.nnet <- predict(Tot.nnetFit ,newdata=validation)
+ptr.nnet <- as.numeric(ptr.nnet)
+rmse.tot.nnet <- accuracy(ptr.nnet,validation$Cost1)
+
+## 3.1.2 Cost1 --- Cycle 2
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=8:17,.decay=c(0.05,0.1,0.3,0.5))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Tot.nnetFit2 <- train(x=training.nl[,-11],y=training.nl$Cost1,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Tot.nnetFit2$bestTune
+Tot.nnetFit2$results
+save(Tot.nnetFit2,file="Total_nnet2.RData")
+ptr.nnet2 <- predict(Tot.nnetFit2 ,newdata=validation)
+ptr.nnet2 <- as.numeric(ptr.nnet2)
+rmse.tot.nnet2 <- accuracy(ptr.nnet2,validation$Cost1)
+
+## 3.1.3 Cost1 --- Cycle 3
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=10,.decay=c(0.05,0.06,0.07,0.08,0.09,0.1,0.11,0.12,0.13,0.14,0.15,0.17,0.2))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Tot.nnetFit3 <- train(x=training.nl[,-11],y=training.nl$Cost1,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Tot.nnetFit3$bestTune
+Tot.nnetFit3$results
+save(Tot.nnetFit3,file="Total_nnet3.RData")
+ptr.nnet3 <- predict(Tot.nnetFit3 ,newdata=validation)
+ptr.nnet3 <- as.numeric(ptr.nnet3)
+rmse.tot.nnet3 <- accuracy(ptr.nnet3,validation$Cost1)
+
+## 3.1.4 Cost1 --- Cycle 4
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=10,.decay=seq(0.111,0.129,0.001))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Tot.nnetFit4 <- train(x=training.nl[,-11],y=training.nl$Cost1,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Tot.nnetFit4$bestTune
+Tot.nnetFit4$results
+save(Tot.nnetFit4,file="Total_nnet4.RData")
+ptr.nnet4 <- predict(Tot.nnetFit4 ,newdata=validation)
+ptr.nnet4 <- as.numeric(ptr.nnet4)
+rmse.tot.nnet4 <- accuracy(ptr.nnet4,validation$Cost1)
+
+### 3.2 CostSet
+training.nl2 <- training %>% select(-c(Cost1,CostRun,Cost1log,CostSetlog,CostRunlog))
+## 3.2.1 CostSet ---- Cycle 1
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=1:10,.decay=c(0,0.1,0.5,1))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Set.nnetFit <- train(x=training.nl2[,-12],y=training.nl2$CostSet,method="nnet",
+                     metric="RMSE",linout=FALSE,preProcess=c("range"),
+                     tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Set.nnetFit$bestTune
+Set.nnetFit$results
+save(Set.nnetFit,file="Set_nnet1.RData")
+ptr.nnet.Set1 <- predict(Set.nnetFit ,newdata=validation)
+ptr.nnet.Set1 <- as.numeric(ptr.nnet.Set1)
+rmse.Set.nnet <- accuracy(ptr.nnet.Set1,validation$CostSet)
+
+## 3.2.2 CostSet ---- Cycle 2
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=3:7,.decay=c(0.01,0.05,0.1,0.15,0.2,0.3,0.4))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Set.nnetFit2 <- train(x=training.nl2[,-12],y=training.nl2$CostSet,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Set.nnetFit2$bestTune
+Set.nnetFit2$results
+save(Set.nnetFit2,file="Set_nnet2.RData")
+ptr.nnet.Set2 <- predict(Set.nnetFit2 ,newdata=validation)
+ptr.nnet.Set2 <- as.numeric(ptr.nnet.Set2)
+rmse.Set.nnet2 <- accuracy(ptr.nnet.Set2,validation$CostSet)
+
+## 3.2.3 CostSet ---- Cycle 3
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=1:3,.decay=seq(0.11,0.19,0.01))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Set.nnetFit3 <- train(x=training.nl2[,-12],y=training.nl2$CostSet,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Set.nnetFit3$bestTune
+Set.nnetFit3$results
+save(Set.nnetFit3,file="Set_nnet3.RData")
+ptr.nnet.Set3 <- predict(Set.nnetFit3 ,newdata=validation)
+ptr.nnet.Set3 <- as.numeric(ptr.nnet.Set3)
+rmse.Set.nnet3 <- accuracy(ptr.nnet.Set3,validation$CostSet)
+
+## 3.2.4 CostSet ---- Cycle 4
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=1:3,.decay=seq(0.131,0.149,0.001))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Set.nnetFit4 <- train(x=training.nl2[,-12],y=training.nl2$CostSet,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Set.nnetFit4$bestTune
+Set.nnetFit4$results
+save(Set.nnetFit4,file="Set_nnet4.RData")
+ptr.nnet.Set4 <- predict(Set.nnetFit4 ,newdata=validation)
+ptr.nnet.Set4 <- as.numeric(ptr.nnet.Set4)
+rmse.Set.nnet4 <- accuracy(ptr.nnet.Set4,validation$CostSet)
+
+### 3.3 CostRun
+training.nl3 <- training %>% select(-c(Cost1,CostSet,Cost1log,CostSetlog,CostRunlog))
+## 3.3.1 CostRun ---- Cycle 1
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=1:10,.decay=c(0,0.1,0.5,1))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Run.nnetFit <- train(x=training.nl3[,-12],y=training.nl3$CostRun,method="nnet",
+                     metric="RMSE",linout=FALSE,preProcess=c("range"),
+                     tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Run.nnetFit$bestTune
+Run.nnetFit$results
+save(Run.nnetFit,file="Run_nnet1.RData")
+ptr.nnet.Run1 <- predict(Run.nnetFit ,newdata=validation)
+ptr.nnet.Run1 <- as.numeric(ptr.nnet.Run1)
+rmse.Run.nnet <- accuracy(ptr.nnet.Run1,validation$CostRun)
+
+## 3.3.2 CostRun ---- Cycle 2
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=8:12,.decay=c(0.01,0.05,0.1,0.15,0.2,0.3,0.4))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Run.nnetFit2 <- train(x=training.nl3[,-12],y=training.nl3$CostRun,method="nnet",
+                     metric="RMSE",linout=FALSE,preProcess=c("range"),
+                     tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Run.nnetFit2$bestTune
+Run.nnetFit2$results
+save(Run.nnetFit2,file="Run_nnet2.RData")
+ptr.nnet.Run2 <- predict(Run.nnetFit2 ,newdata=validation)
+ptr.nnet.Run2 <- as.numeric(ptr.nnet.Run2)
+rmse.Run.nnet2 <- accuracy(ptr.nnet.Run2,validation$CostRun)
+
+## 3.3.3 CostRun ---- Cycle 3
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F)
+tunegrid <- expand.grid(.size=8:10,.decay=seq(0.06,0.14,0.01))
+maxsize <- max(tunegrid$.size)
+numWts <- 500
+set.seed(90)
+Run.nnetFit3 <- train(x=training.nl3[,-12],y=training.nl3$CostRun,method="nnet",
+                      metric="RMSE",linout=FALSE,preProcess=c("range"),
+                      tuneGrid=tunegrid,trace=FALSE,maxit=100,MaxNWts=numWts,trControl=ctrl)
+Run.nnetFit3$bestTune
+Run.nnetFit3$results
+save(Run.nnetFit3,file="Run_nnet3.RData")
+ptr.nnet.Run3 <- predict(Run.nnetFit3 ,newdata=validation)
+ptr.nnet.Run3 <- as.numeric(ptr.nnet.Run3)
+rmse.Run.nnet3 <- accuracy(ptr.nnet.Run3,validation$CostRun)
+
+#### 4. Elastic Net
+### 4.1 Cost1
+training.lm1 <- training %>% select(-c(Cost1,CostSet,CostRun,CostSetlog,CostRunlog))
+training.lm1 <- training.lm1[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricaltr <- training.lm1[,13:47] %>% model.matrix(~.)
+categoricaltr <- categoricaltr[,-1]
+numerictr <- training.lm1[,2:12] %>% as.matrix()
+training.lm1x <- cbind(numerictr,categoricaltr)
+training.lm1y <- training.lm1$Cost1log
+
+validation.enet <- validation %>% select(-c(Cost1,CostSet,CostRun,CostSetlog,CostRunlog))
+names(validation.enet)
+validation.enet <- validation.enet[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricalvl <- validation.enet[,13:47] %>% model.matrix(~.-1,.)
+categoricalvl <- categoricalvl[,-1]
+numericvl <- validation.enet[,2:12] %>% as.matrix()
+validation.enetx <- cbind(numericvl,categoricalvl)
+validation.enety <- validation.enet$Cost1log
+
+## 4.1.1 Cost1 ---- Cycle 1
+library(glmnet)
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.1,0.9,0.05),lambda=c(0.1,0.01,0.001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Tot_enetmodel <- train(x=training.lm1x,y=training.lm1y,method="glmnet",tuneGrid=netGrid,
+                   trControl = ctrl, metric="Rsquared")
+Tot_enetmodel$bestTune
+Tot_enetmodel$results
+save(Tot_enetmodel,file="Total_enet1.RData")
+ptr.tot.enet1 <- predict(Tot_enetmodel, newdata=validation.enetx)
+rmse.tot.enet1 <- accuracy(ptr.tot.enet1, validation.enety)
+
+## 4.1.2 Cost1 ---- Cycle 2
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0,0.3,0.01),lambda=seq(0.00001,0.01,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Tot_enetmodel2 <- train(x=training.lm1x,y=training.lm1y,method="glmnet",tuneGrid=netGrid,
+                       trControl = ctrl, metric="Rsquared")
+Tot_enetmodel2$bestTune
+result1 <- as.data.frame(Tot_enetmodel2$results)
+rsq <- result1[30008,4]
+save(Tot_enetmodel2,file="Total_enet2.RData")
+ptr.tot.enet2 <- predict(Tot_enetmodel2, newdata=validation.enetx)
+rmse.tot.enet2 <- accuracy(ptr.tot.enet2, validation.enety)
+
+## 4.1.3 Cost1 ---- Cycle 3
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.05,0.5,0.01),lambda=seq(0,0.0003,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Tot_enetmodel3 <- train(x=training.lm1x,y=training.lm1y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Tot_enetmodel3$bestTune
+result2 <- as.data.frame(Tot_enetmodel3$results)
+rsq2 <- result2[1216,4]
+save(Tot_enetmodel3,file="Total_enet3.RData")
+ptr.tot.enet3 <- predict(Tot_enetmodel3, newdata=validation.enetx)
+rmse.tot.enet3 <- accuracy(ptr.tot.enet3, validation.enety)
+
+## 4.1.4 Variable Importance
+varEnet_Tot <- varImp(Tot_enetmodel3)
+varen_Tot <- as.data.frame(varEnet_Tot$importance)
+plot(varEnet_Tot,cex=0.1)
+varen_Tot <- data.frame(overall=varen_Tot$Overall,names=rownames(varen_Tot))
+varen_Tot <- varen_Tot[order(varen_Tot$overall,decreasing=T),]
+imp_Tot <- varen_Tot[1:29,]
+termsen_Tot <- varen_Tot$names[1:29]
+termsen_Tot <- as.character(termsen_Tot)
+
+### 4.2 CostSet
+training.lm2 <- training %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostRunlog))
+training.lm2 <- training.lm2[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricaltr <- training.lm2[,13:47] %>% model.matrix(~.-1,.)
+categoricaltr <- categoricaltr[,-1]
+numerictr <- training.lm2[,2:12] %>% as.matrix()
+training.lm2x <- cbind(numerictr,categoricaltr)
+training.lm2y <- training.lm2$CostSetlog
+
+validation.enet2 <- validation %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostRunlog))
+validation.enet2 <- validation.enet2[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricalvl <- validation.enet2[,13:47] %>% model.matrix(~.-1,.)
+categoricalvl <- categoricalvl[,-1]
+numericvl <- validation.enet2[,2:12] %>% as.matrix()
+validation.enet2x <- cbind(numericvl,categoricalvl)
+validation.enet2y <- validation.enet2$CostSetlog
+
+## 4.2.1 CostSet ---- Cycle 1
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.1,0.9,0.05),lambda=c(0.1,0.01,0.001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Set_enetmodel <- train(x=training.lm2x,y=training.lm2y,method="glmnet",tuneGrid=netGrid,
+                       trControl = ctrl, metric="Rsquared")
+Set_enetmodel$bestTune
+Set_enetmodel$results
+save(Set_enetmodel,file="Set_enet1.RData")
+ptr.set.enet1 <- predict(Set_enetmodel, newdata=validation.enet2x)
+rmse.set.enet1 <- accuracy(ptr.set.enet1, validation.enet2y)
+
+## 4.2.2 CostSet ---- Cycle2
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0,0.3,0.01),lambda=seq(0.00001,0.01,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Set_enetmodel2 <- train(x=training.lm2x,y=training.lm2y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Set_enetmodel2$bestTune
+result21 <- as.data.frame(Set_enetmodel2$results)
+rsq21 <- result21[12010,4]
+save(Set_enetmodel2,file="Set_enet2.RData")
+ptr.set.enet2 <- predict(Set_enetmodel2, newdata=validation.enet2x)
+rmse.set.enet2 <- accuracy(ptr.set.enet2, validation.enet2y)
+
+## 4.2.3 Variable Importance for SETUP Time
+varEnet_Set <- varImp(Set_enetmodel2)
+varen_Set <- as.data.frame(varEnet_Set$importance)
+plot(varEnet_Set,cex=0.1)
+varen_Set <- data.frame(overall=varen_Set$Overall,names=rownames(varen_Set))
+varen_Set <- varen_Set[order(varen_Set$overall,decreasing=T),]
+imp_Set <- varen_Set[1:23,]
+termsen_Set <- varen_Set$names[1:23]
+termsen_Set <- as.character(termsen_Set)
+
+### 4.3 CostRun
+training.lm3 <- training %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostSetlog))
+training.lm3 <- training.lm3[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricaltr <- training.lm3[,13:47] %>% model.matrix(~.-1,.)
+categoricaltr <- categoricaltr[,-1]
+numerictr <- training.lm3[,2:12] %>% as.matrix()
+training.lm3x <- cbind(numerictr,categoricaltr)
+training.lm3y <- training.lm3$CostRunlog
+
+validation.enet3 <- validation %>% select(-c(Cost1,CostSet,CostRun,Cost1log,CostSetlog))
+validation.enet3 <- validation.enet3[,c(12,seq(1,11,1),seq(13,47,1))]
+categoricalvl <- validation.enet3[,13:47] %>% model.matrix(~.-1,.)
+categoricalvl <- categoricalvl[,-1]
+numericvl <- validation.enet3[,2:12] %>% as.matrix()
+validation.enet3x <- cbind(numericvl,categoricalvl)
+validation.enet3y <- validation.enet3$CostRunlog
+
+## 4.3.1 CostRun ----- Cycle 1
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.1,0.9,0.05),lambda=c(0.1,0.01,0.001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Run_enetmodel <- train(x=training.lm3x,y=training.lm3y,method="glmnet",tuneGrid=netGrid,
+                       trControl = ctrl, metric="Rsquared")
+Run_enetmodel$bestTune
+Run_enetmodel$results
+save(Run_enetmodel,file="Run_enet1.RData")
+ptr.run.enet1 <- predict(Run_enetmodel, newdata=validation.enet3x)
+rmse.run.enet1 <- accuracy(ptr.run.enet1, validation.enet3y)
+
+## 4.3.2 CostRun ----- Cycle2
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0,0.3,0.01),lambda=seq(0.00001,0.01,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Run_enetmodel2 <- train(x=training.lm3x,y=training.lm3y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Run_enetmodel2$bestTune
+result31 <- as.data.frame(Run_enetmodel2$results)
+rsq31 <- result31[30019,4]
+save(Run_enetmodel2,file="Run_enet2.RData")
+ptr.run.enet2 <- predict(Run_enetmodel2, newdata=validation.enet3x)
+rmse.run.enet2 <- accuracy(ptr.run.enet2, validation.enet3y)
+
+## 4.3.3 CostRun ---- Cycle 3
+set.seed(50)
+netGrid <- expand.grid(alpha=seq(0.05,0.5,0.01),lambda=seq(0,0.0004,0.00001))
+cvindx <- createMultiFolds(index,k=10,times=3)
+ctrl <- trainControl(method="repeatedcv",index=cvindx,classProbs=F,verboseIter = TRUE)
+Run_enetmodel3 <- train(x=training.lm3x,y=training.lm3y,method="glmnet",tuneGrid=netGrid,
+                        trControl = ctrl, metric="Rsquared")
+Run_enetmodel3$bestTune
+result32 <- as.data.frame(Run_enetmodel3$results)
+rsq32 <- result32[1736,4]
+save(Run_enetmodel3,file="Run_enet3.RData")
+ptr.run.enet3 <- predict(Run_enetmodel3, newdata=validation.enet3x)
+rmse.run.enet3 <- accuracy(ptr.run.enet3, validation.enet3y)
+
+## 4.1.4 Variable Importance
+varEnet_Run <- varImp(Run_enetmodel3)
+varen_Run <- as.data.frame(varEnet_Run$importance)
+plot(varEnet_Run,cex=0.1)
+varen_Run <- data.frame(overall=varen_Run$Overall,names=rownames(varen_Run))
+varen_Run <- varen_Run[order(varen_Run$overall,decreasing=T),]
+imp_Run <- varen_Run[1:25,]
+termsen_Run <- varen_Run$names[1:25]
+termsen_Run <- as.character(termsen_Run)
+
+stopCluster(cl)
+
+
+
+
+
